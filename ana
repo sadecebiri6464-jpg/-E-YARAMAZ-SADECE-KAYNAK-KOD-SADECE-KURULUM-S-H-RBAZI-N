@@ -17,7 +17,7 @@ import requests
 import minecraft_launcher_lib
 
 # Güncelleme Sistemi Ayarları
-LAUNCHER_VERSION = "1.1.0"
+LAUNCHER_VERSION = "1.2.0"
 GITHUB_OWNER = "sadecebiri6464-jpg"
 GITHUB_REPO = "-E-YARAMAZ-SADECE-KAYNAK-KOD-SADECE-KURULUM-S-H-RBAZI-N"
 
@@ -36,7 +36,7 @@ except ImportError:
 
 MODRINTH_API = "https://api.modrinth.com/v2"
 CURSEFORGE_API = "https://api.curseforge.com/v1"
-HEADERS = {"User-Agent": "FLC-FoxLauncher/1.1"}
+HEADERS = {"User-Agent": "FLC-FoxLauncher/1.2"}
 
 
 def _point_in_triangle(px, py, ax, ay, bx, by, cx, cy):
@@ -286,11 +286,13 @@ class FoxLauncher:
         self.config = self._load_config()
 
         self.search_results = []
+        self.modpack_results = []
         self.all_profiles = []
         self.installed_mods_data = []
         self.mod_icon_cache = {}
         self.installed_icon_cache = {}
         self.current_mod_photo = None
+        self.current_modpack_photo = None
         self.current_installed_photo = None
         self._pulse_index = 0
         self._is_busy = False
@@ -430,8 +432,8 @@ class FoxLauncher:
 
         self.log(f"FLC v{LAUNCHER_VERSION} hazır. Oyun dizini: {self.default_mc_dir}")
         threading.Thread(target=self.load_versions, daemon=True).start()
-        # İnternet açıksa arka planda otomatik güncelleme kontrolü başlat
-        threading.Thread(target=self._check_for_updates_background, daemon=True).start()
+        if self.config.get("auto_update_check", True):
+            threading.Thread(target=self._check_for_updates_background, daemon=True).start()
 
     # --- OTOMATİK GÜNCELLEME SİSTEMİ ---
     def _parse_version_tuple(self, ver_str):
@@ -495,7 +497,6 @@ class FoxLauncher:
             if remote_ver and self._parse_version_tuple(remote_ver) > self._parse_version_tuple(LAUNCHER_VERSION):
                 has_update = True
             elif hashlib.sha256(local_norm.encode("utf-8")).hexdigest() != hashlib.sha256(remote_norm.encode("utf-8")).hexdigest():
-                # GitHub'da daha eski bir sürüm etiketi yoksa kod değişikliğini güncelleme say
                 if not remote_ver or self._parse_version_tuple(remote_ver) >= self._parse_version_tuple(LAUNCHER_VERSION):
                     has_update = True
 
@@ -506,19 +507,19 @@ class FoxLauncher:
             else:
                 self.log(f"[GÜNCELLEME] FOXLAUNCHER güncel (v{LAUNCHER_VERSION}).")
         except Exception:
-            # İnternet kapalıysa veya erişilemiyorsa sessizce geç
             pass
 
     def _prompt_and_apply_update(self, new_code, ver_label=""):
-        answer = messagebox.askyesno(
-            "Güncelleme Mevcut — FOXLAUNCHER",
-            f"FOXLAUNCHER için yeni bir güncelleme{ver_label} bulundu!\n\n"
-            f"Mevcut Sürüm: v{LAUNCHER_VERSION}\n"
-            "Şimdi güncellenip otomatik olarak yeniden başlatılsın mı?"
-        )
-        if not answer:
-            self.log("[GÜNCELLEME] Kullanıcı güncellemeyi erteledi.")
-            return
+        if self.config.get("auto_update_ask", True):
+            answer = messagebox.askyesno(
+                "Güncelleme Mevcut — FOXLAUNCHER",
+                f"FOXLAUNCHER için yeni bir güncelleme{ver_label} bulundu!\n\n"
+                f"Mevcut Sürüm: v{LAUNCHER_VERSION}\n"
+                "Şimdi güncellenip otomatik olarak yeniden başlatılsın mı?"
+            )
+            if not answer:
+                self.log("[GÜNCELLEME] Kullanıcı güncellemeyi erteledi.")
+                return
 
         try:
             target_file = os.path.abspath(sys.argv[0])
@@ -564,7 +565,7 @@ class FoxLauncher:
         )
         style.configure("TNotebook", background=self.bg_card, borderwidth=0)
         style.configure("TNotebook.Tab", background=self.bg_input, foreground=self.text_muted,
-                        padding=[14, 7], font=("Segoe UI", 9, "bold"), borderwidth=0)
+                        padding=[12, 7], font=("Segoe UI", 9, "bold"), borderwidth=0)
         style.map("TNotebook.Tab", background=[("selected", self.accent_fox)],
                   foreground=[("selected", "#ffffff")])
 
@@ -574,6 +575,11 @@ class FoxLauncher:
             "users": ["Thefoxx20"],
             "polymc_instances_dir": "",
             "ram_mb": 4096,
+            "auto_update_check": True,
+            "auto_update_ask": True,
+            "notify_update": True,
+            "notify_mod_done": True,
+            "notify_game_state": False,
         }
         if os.path.isfile(self.config_file):
             try:
@@ -583,12 +589,7 @@ class FoxLauncher:
                 active = data.get("active", users[0])
                 if active not in users:
                     active = users[0]
-                return {
-                    "active": active,
-                    "users": users,
-                    "polymc_instances_dir": data.get("polymc_instances_dir", ""),
-                    "ram_mb": int(data.get("ram_mb", 4096)),
-                }
+                return {**default_data, **data, "active": active, "users": users, "ram_mb": int(data.get("ram_mb", 4096))}
             except Exception:
                 pass
         return default_data
@@ -692,7 +693,11 @@ class FoxLauncher:
 
         self.loader_combo = ttk.Combobox(ver_card, state="readonly", font=("Segoe UI", 9),
                                          values=["fabric", "forge", "quilt", "neoforge", "vanilla"])
-        self.loader_combo.current(0)
+        default_loader = self.config.get("default_loader", "fabric")
+        if default_loader in self.loader_combo["values"]:
+            self.loader_combo.set(default_loader)
+        else:
+            self.loader_combo.current(0)
         self.loader_combo.grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=(4, 8))
 
         self.ram_entry = tk.Entry(ver_card, bg=self.bg_input, fg=self.text_main, width=7,
@@ -763,7 +768,7 @@ class FoxLauncher:
 
         # SEKME 1: Mod İndir & Detaylar
         search_tab = tk.Frame(right_panel, bg=self.bg_card, padx=14, pady=12)
-        right_panel.add(search_tab, text=" Mod İndir & Detaylar ")
+        right_panel.add(search_tab, text=" Mod İndir ")
 
         row1 = tk.Frame(search_tab, bg=self.bg_card)
         row1.pack(fill="x", pady=(0, 8))
@@ -792,7 +797,7 @@ class FoxLauncher:
                                      relief="flat", bd=4, font=("Segoe UI", 8))
         self.cf_key_entry.pack(side="left", fill="x", expand=True, padx=(8, 0))
 
-        self.results_listbox = tk.Listbox(search_tab, height=8, bg=self.bg_input, fg=self.text_main,
+        self.results_listbox = tk.Listbox(search_tab, height=7, bg=self.bg_input, fg=self.text_main,
                                           selectmode=tk.SINGLE, font=("Segoe UI", 9), relief="flat", bd=8,
                                           selectbackground=self.accent_fox, highlightthickness=0)
         self.results_listbox.pack(fill="both", expand=True, pady=(0, 10))
@@ -828,9 +833,76 @@ class FoxLauncher:
         )
         self.dl_mod_btn.pack(fill="x")
 
-        # SEKME 2: Tüm Profiller (Özel + PolyMC Karışık)
+        # SEKME 2: Modpack İndir (Modrinth + CurseForge)
+        modpack_tab = tk.Frame(right_panel, bg=self.bg_card, padx=14, pady=12)
+        right_panel.add(modpack_tab, text=" Modpack İndir ")
+
+        mp_row1 = tk.Frame(modpack_tab, bg=self.bg_card)
+        mp_row1.pack(fill="x", pady=(0, 8))
+
+        self.mp_source_combo = ttk.Combobox(mp_row1, width=12, state="readonly", values=["Modrinth", "CurseForge"])
+        self.mp_source_combo.current(0)
+        self.mp_source_combo.pack(side="left", padx=(0, 8))
+
+        self.mp_search_entry = tk.Entry(mp_row1, bg=self.bg_input, fg=self.text_main,
+                                        insertbackground=self.text_main, relief="flat", bd=6, font=("Segoe UI", 10))
+        self.mp_search_entry.insert(0, "Fabulously Optimized")
+        self.mp_search_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.mp_search_entry.bind("<Return>", lambda e: self.start_modpack_search_thread())
+
+        mp_search_btn = SoftButton(mp_row1, text="Ara", command=self.start_modpack_search_thread,
+                                   bg=self.accent_purple, hover_bg="#a78bfa", active_bg="#7c3aed",
+                                   height=32, radius=11, font=("Segoe UI", 9, "bold"))
+        mp_search_btn.configure(width=76)
+        mp_search_btn.pack(side="left")
+
+        mp_row2 = tk.Frame(modpack_tab, bg=self.bg_card)
+        mp_row2.pack(fill="x", pady=(0, 8))
+        tk.Label(mp_row2, text="CurseForge API Key (CF modpack için):", fg=self.text_muted,
+                 bg=self.bg_card, font=("Segoe UI", 8)).pack(side="left")
+        self.mp_cf_key_entry = tk.Entry(mp_row2, bg=self.bg_input, fg=self.text_main, show="*",
+                                        relief="flat", bd=4, font=("Segoe UI", 8))
+        self.mp_cf_key_entry.pack(side="left", fill="x", expand=True, padx=(8, 0))
+
+        self.mp_results_listbox = tk.Listbox(modpack_tab, height=7, bg=self.bg_input, fg=self.text_main,
+                                             selectmode=tk.SINGLE, font=("Segoe UI", 9), relief="flat", bd=8,
+                                             selectbackground=self.accent_purple, highlightthickness=0)
+        self.mp_results_listbox.pack(fill="both", expand=True, pady=(0, 10))
+        self.mp_results_listbox.bind("<<ListboxSelect>>", self.on_modpack_select)
+
+        mp_detail = tk.Frame(modpack_tab, bg="#11161f", padx=12, pady=10)
+        mp_detail.pack(fill="x", pady=(0, 10))
+
+        self.mp_logo_label = tk.Label(mp_detail, text="PACK\nLOGOSU", width=10, height=5,
+                                      bg="#1e2633", fg="#64748b", font=("Segoe UI", 8, "bold"))
+        self.mp_logo_label.pack(side="left", padx=(0, 12))
+
+        mp_info = tk.Frame(mp_detail, bg="#11161f")
+        mp_info.pack(side="left", fill="both", expand=True)
+
+        self.mp_title_label = tk.Label(mp_info, text="Bir modpack seçerek ayrıntılarını görüntüle",
+                                       font=("Segoe UI", 11, "bold"), fg="#f8fafc", bg="#11161f", anchor="w")
+        self.mp_title_label.pack(fill="x")
+
+        self.mp_meta_label = tk.Label(mp_info, text="Kaynak: -  |  Yazar: -  |  İndirme: -",
+                                      font=("Segoe UI", 8, "bold"), fg="#c4b5fd", bg="#11161f", anchor="w")
+        self.mp_meta_label.pack(fill="x", pady=(2, 4))
+
+        self.mp_desc_label = tk.Label(mp_info, text="Seçilen modpack yeni bir profil olarak kurulur, modları ve override dosyaları indirilir.",
+                                      font=("Segoe UI", 9), fg="#cbd5e1", bg="#11161f",
+                                      wraplength=430, justify="left", anchor="w")
+        self.mp_desc_label.pack(fill="x")
+
+        self.dl_mp_btn = SoftButton(
+            modpack_tab, text="Seçili Modpack'i Yeni Profil Olarak İndir ve Kur",
+            command=self.start_modpack_install_thread,
+            bg="#16a34a", hover_bg="#22c55e", active_bg="#15803d", height=38, radius=13
+        )
+        self.dl_mp_btn.pack(fill="x")
+
+        # SEKME 3: Tüm Profiller (Özel + PolyMC Karışık)
         profiles_tab = tk.Frame(right_panel, bg=self.bg_card, padx=14, pady=12)
-        right_panel.add(profiles_tab, text=" Tüm Profiller (Özel + PolyMC) ")
+        right_panel.add(profiles_tab, text=" Profiller ")
 
         create_box = tk.Frame(profiles_tab, bg="#11161f", padx=12, pady=10)
         create_box.pack(fill="x", pady=(0, 10))
@@ -870,7 +942,7 @@ class FoxLauncher:
         prof_top_row = tk.Frame(profiles_tab, bg=self.bg_card)
         prof_top_row.pack(fill="x", pady=(0, 6))
 
-        tk.Label(prof_top_row, text="Tüm Profiller (Özel & PolyMC Karışık)", font=("Segoe UI", 9, "bold"),
+        tk.Label(prof_top_row, text="Tüm Profiller (Özel, Modpack & PolyMC)", font=("Segoe UI", 9, "bold"),
                  fg=self.text_main, bg=self.bg_card).pack(side="left")
 
         poly_folder_btn = SoftButton(prof_top_row, text="PolyMC Klasörü Seç...", command=self.choose_polymc_folder,
@@ -915,7 +987,7 @@ class FoxLauncher:
         del_p_btn.configure(width=92)
         del_p_btn.pack(side="left")
 
-        # SEKME 3: Kurulu Modlarım
+        # SEKME 4: Kurulu Modlarım
         installed_tab = tk.Frame(right_panel, bg=self.bg_card, padx=14, pady=12)
         right_panel.add(installed_tab, text=" Kurulu Modlarım ")
 
@@ -1094,7 +1166,8 @@ class FoxLauncher:
                 try:
                     with open(meta_file, "r", encoding="utf-8") as f:
                         meta = json.load(f)
-                    meta["type"] = "custom"
+                    if meta.get("type") not in ("custom", "modpack"):
+                        meta["type"] = "custom"
                     meta["game_dir"] = p_dir
                     mods_c = len([x for x in os.listdir(os.path.join(p_dir, "mods")) if x.lower().endswith((".jar", ".jar.disabled"))]) if os.path.isdir(os.path.join(p_dir, "mods")) else 0
                     meta["mod_count"] = mods_c
@@ -1113,6 +1186,8 @@ class FoxLauncher:
         for idx, p in enumerate(self.all_profiles):
             if p["type"] == "default":
                 tag = "[STANDART]"
+            elif p["type"] == "modpack":
+                tag = "[MODPACK]"
             elif p["type"] == "custom":
                 tag = "[ÖZEL]"
             else:
@@ -1126,6 +1201,8 @@ class FoxLauncher:
             )
             if p["type"] == "polymc":
                 self.all_prof_listbox.itemconfig(idx, fg="#c4b5fd")
+            elif p["type"] == "modpack":
+                self.all_prof_listbox.itemconfig(idx, fg="#86efac")
             elif p["type"] == "custom":
                 self.all_prof_listbox.itemconfig(idx, fg="#fdba74")
             else:
@@ -1136,7 +1213,12 @@ class FoxLauncher:
         if not sel:
             return
         p = self.all_profiles[sel[0]]
-        kind = {"default": "Standart", "custom": "Özel Profil", "polymc": "PolyMC Profili"}.get(p["type"], "Profil")
+        kind = {
+            "default": "Standart",
+            "custom": "Özel Profil",
+            "modpack": "Modpack Profili",
+            "polymc": "PolyMC Profili"
+        }.get(p["type"], "Profil")
         self.prof_detail_label.config(
             text=(
                 f"Tür: {kind}  |  Ad: {p['name']}  |  Sürüm: {p.get('mc_version') or '?'} ({p.get('loader', '-')})\n"
@@ -1241,10 +1323,10 @@ class FoxLauncher:
             self.ram_entry.delete(0, tk.END)
             self.ram_entry.insert(0, str(prof["ram_mb"]))
 
-        tag = "PolyMC" if prof.get("type") == "polymc" else "Özel Profil"
+        tag = "PolyMC" if prof.get("type") == "polymc" else ("Modpack" if prof.get("type") == "modpack" else "Özel Profil")
         self.active_profile_badge.config(
             text=f"{tag}: {prof['name']} ({prof.get('mc_version') or '?'})",
-            bg="#431407" if tag == "Özel Profil" else "#3b0764",
+            bg="#14532d" if tag == "Modpack" else ("#431407" if tag == "Özel Profil" else "#3b0764"),
             fg="#fed7aa"
         )
         self.refresh_all_profiles()
@@ -1682,6 +1764,8 @@ class FoxLauncher:
             self.game_process = None
             self.root.after(0, lambda: self.kill_btn.set_enabled(False))
             self.update_status("Oyun kapatıldı.", also_log=True)
+            if self.config.get("notify_game_state", False):
+                self.root.after(0, lambda: messagebox.showinfo("FOXLAUNCHER", "Minecraft oturumu sona erdi."))
 
     def force_close_game(self):
         proc = self.game_process
@@ -1941,9 +2025,9 @@ class FoxLauncher:
             return
 
         self.mod_logo_label.config(image="", text="Yükleniyor...", width=10, height=5)
-        threading.Thread(target=self._fetch_mod_logo, args=(icon_url, mod["title"]), daemon=True).start()
+        threading.Thread(target=self._fetch_mod_logo, args=(icon_url, mod["title"], self.mod_logo_label, "mod"), daemon=True).start()
 
-    def _fetch_mod_logo(self, url, title_fallback):
+    def _fetch_mod_logo(self, url, title_fallback, target_label, kind):
         try:
             resp = requests.get(url, headers=HEADERS, timeout=10)
             resp.raise_for_status()
@@ -1953,15 +2037,21 @@ class FoxLauncher:
             self.mod_icon_cache[url] = photo
 
             def _apply():
-                self.current_mod_photo = photo
-                self.mod_logo_label.config(image=photo, text="", width=64, height=64)
+                if kind == "mod":
+                    self.current_mod_photo = photo
+                else:
+                    self.current_modpack_photo = photo
+                target_label.config(image=photo, text="", width=64, height=64)
 
             self.root.after(0, _apply)
         except Exception:
             def _fallback():
                 photo = self._make_badge_photo(title_fallback, active=True)
-                self.current_mod_photo = photo
-                self.mod_logo_label.config(image=photo, text="", width=64, height=64)
+                if kind == "mod":
+                    self.current_mod_photo = photo
+                else:
+                    self.current_modpack_photo = photo
+                target_label.config(image=photo, text="", width=64, height=64)
             self.root.after(0, _fallback)
 
     def start_mod_download_thread(self):
@@ -1985,6 +2075,8 @@ class FoxLauncher:
             self.root.after(0, self.populate_results)
             self.root.after(0, self.on_mod_result_select)
             self.update_status("Mod kurulumu tamamlandı.", also_log=True)
+            if self.config.get("notify_mod_done", True):
+                self.root.after(0, lambda: messagebox.showinfo("FOXLAUNCHER", f"'{mod['title']}' mod kurulumu tamamlandı!"))
         except Exception as e:
             self.root.after(0, lambda: messagebox.showerror("Mod İndirme Hatası", str(e)))
             self.update_status(f"Mod hatası: {e}", also_log=True)
@@ -2042,7 +2134,7 @@ class FoxLauncher:
                     f.write(content)
                 self.log(f"İndirildi: {f_info['filename']}")
         else:
-            api_key = self.cf_key_entry.get().strip()
+            api_key = self.cf_key_entry.get().strip() or self.mp_cf_key_entry.get().strip()
             if not api_key:
                 raise RuntimeError("CurseForge indirmesi için API Key gerekli.")
             cf_headers = {**HEADERS, "x-api-key": api_key}
@@ -2075,6 +2167,375 @@ class FoxLauncher:
                 with open(out_path, "wb") as f:
                     f.write(content)
                 self.log(f"İndirildi: {file_obj['fileName']}")
+
+    # --- MODPACK ARAMA & KURULUM (MODRINTH + CURSEFORGE) ---
+    def start_modpack_search_thread(self):
+        query = self.mp_search_entry.get().strip()
+        source = self.mp_source_combo.get()
+        if not query:
+            return
+        self._is_busy = True
+        self.update_status(f"{source} modpack araması: '{query}'...", also_log=True)
+        threading.Thread(target=self._search_modpacks, args=(source, query), daemon=True).start()
+
+    def _search_modpacks(self, source, query):
+        try:
+            self.modpack_results.clear()
+            if source == "Modrinth":
+                r = requests.get(
+                    f"{MODRINTH_API}/search",
+                    params={
+                        "query": query,
+                        "facets": json.dumps([["project_type:modpack"]]),
+                        "limit": 25
+                    },
+                    headers=HEADERS,
+                    timeout=15
+                )
+                r.raise_for_status()
+                for h in r.json().get("hits", []):
+                    self.modpack_results.append({
+                        "source": "Modrinth",
+                        "id": h["project_id"],
+                        "slug": h.get("slug", ""),
+                        "title": h.get("title", "Bilinmeyen Modpack"),
+                        "author": h.get("author", "Bilinmiyor"),
+                        "downloads": h.get("downloads", 0),
+                        "description": h.get("description", "Açıklama yok."),
+                        "icon_url": h.get("icon_url") or "",
+                        "versions": ", ".join(h.get("versions", [])[-4:]),
+                    })
+            else:
+                api_key = self.mp_cf_key_entry.get().strip() or self.cf_key_entry.get().strip()
+                if not api_key:
+                    raise RuntimeError("CurseForge modpack araması için API Key girmen gerekiyor.")
+                cf_headers = {**HEADERS, "x-api-key": api_key}
+                r = requests.get(
+                    f"{CURSEFORGE_API}/mods/search",
+                    params={"gameId": 432, "classId": 4471, "searchFilter": query, "pageSize": 25},
+                    headers=cf_headers,
+                    timeout=15
+                )
+                r.raise_for_status()
+                for m in r.json().get("data", []):
+                    authors = ", ".join([a.get("name", "") for a in m.get("authors", [])]) or "Bilinmiyor"
+                    logo_url = (m.get("logo") or {}).get("thumbnailUrl") or (m.get("logo") or {}).get("url") or ""
+                    mc_vers = sorted({
+                        f.get("gameVersion")
+                        for idx_f in m.get("latestFilesIndexes", [])
+                        for f in [idx_f] if idx_f.get("gameVersion")
+                    })
+                    self.modpack_results.append({
+                        "source": "CurseForge",
+                        "id": m["id"],
+                        "slug": m.get("slug", ""),
+                        "title": m.get("name", "Bilinmeyen Modpack"),
+                        "author": authors,
+                        "downloads": m.get("downloadCount", 0),
+                        "description": m.get("summary", "Açıklama yok."),
+                        "icon_url": logo_url,
+                        "versions": ", ".join(mc_vers[-4:]),
+                    })
+
+            self.root.after(0, self._populate_modpack_results)
+            self.update_status(f"{len(self.modpack_results)} modpack bulundu.", also_log=True)
+        except Exception as e:
+            self.root.after(0, lambda: messagebox.showerror("Modpack Arama Hatası", str(e)))
+            self.update_status(f"Modpack arama hatası: {e}", also_log=True)
+        finally:
+            self._is_busy = False
+
+    def _populate_modpack_results(self):
+        self.mp_results_listbox.delete(0, tk.END)
+        for idx, mp in enumerate(self.modpack_results):
+            dl_fmt = f"{mp['downloads']:,}".replace(",", ".")
+            ver_txt = f" [{mp['versions']}]" if mp.get("versions") else ""
+            self.mp_results_listbox.insert(
+                tk.END,
+                f"[{mp['source']}]  {mp['title']}{ver_txt}  —  by {mp['author']} ({dl_fmt} indirme)"
+            )
+            self.mp_results_listbox.itemconfig(idx, fg="#e9d5ff" if mp["source"] == "Modrinth" else "#fdba74")
+
+    def on_modpack_select(self, event=None):
+        sel = self.mp_results_listbox.curselection()
+        if not sel:
+            return
+        mp = self.modpack_results[sel[0]]
+        dl_fmt = f"{mp['downloads']:,}".replace(",", ".")
+        self.mp_title_label.config(text=f"{mp['title']}  [{mp['source']}]")
+        self.mp_meta_label.config(
+            text=f"Kaynak: {mp['source']}  |  Yazar: {mp['author']}  |  İndirme: {dl_fmt}"
+        )
+        ver_line = f"\nSürümler: {mp['versions']}" if mp.get("versions") else ""
+        self.mp_desc_label.config(text=f"{mp['description']}{ver_line}")
+
+        icon_url = mp.get("icon_url", "")
+        if not icon_url or not HAS_PIL:
+            photo = self._make_badge_photo(mp["title"], active=True)
+            self.current_modpack_photo = photo
+            self.mp_logo_label.config(image=photo, text="", width=64, height=64)
+            return
+
+        if icon_url in self.mod_icon_cache:
+            self.current_modpack_photo = self.mod_icon_cache[icon_url]
+            self.mp_logo_label.config(image=self.current_modpack_photo, text="", width=64, height=64)
+            return
+
+        self.mp_logo_label.config(image="", text="Yükleniyor...", width=10, height=5)
+        threading.Thread(target=self._fetch_mod_logo, args=(icon_url, mp["title"], self.mp_logo_label, "modpack"), daemon=True).start()
+
+    def start_modpack_install_thread(self):
+        sel = self.mp_results_listbox.curselection()
+        if not sel:
+            messagebox.showwarning("Uyarı", "Listeden bir modpack seçmelisin.")
+            return
+        mp = self.modpack_results[sel[0]]
+        self._is_busy = True
+        self.dl_mp_btn.set_enabled(False)
+        self.dl_mp_btn.set_text("MODPACK İNDİRİLİYOR VE KURULUYOR...")
+        threading.Thread(target=self._run_modpack_install, args=(mp,), daemon=True).start()
+
+    def _safe_extract_zip_prefix(self, zf, prefix_folder, dest_dir):
+        prefix_norm = prefix_folder.strip("/\\") + "/"
+        dest_abs = os.path.abspath(dest_dir)
+        extracted = 0
+        for member in zf.infolist():
+            name = member.filename.replace("\\", "/")
+            if not name.startswith(prefix_norm) or name.endswith("/"):
+                continue
+            rel_path = name[len(prefix_norm):]
+            if not rel_path:
+                continue
+            out_path = os.path.abspath(os.path.join(dest_dir, rel_path))
+            if not out_path.startswith(dest_abs + os.sep) and out_path != dest_abs:
+                continue
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            with zf.open(member, "r") as src_f, open(out_path, "wb") as dst_f:
+                shutil.copyfileobj(src_f, dst_f)
+            extracted += 1
+        return extracted
+
+    def _install_modrinth_modpack(self, mp, prof_dir):
+        r = requests.get(f"{MODRINTH_API}/project/{mp['id']}/version", headers=HEADERS, timeout=15)
+        r.raise_for_status()
+        versions = r.json()
+        if not versions:
+            raise RuntimeError("Bu modpack için indirilebilir sürüm bulunamadı.")
+
+        ver_obj = versions[0]
+        mrpack_file = next((f for f in ver_obj.get("files", []) if f.get("filename", "").endswith(".mrpack")), None)
+        if not mrpack_file:
+            mrpack_file = ver_obj["files"][0]
+
+        self.update_status(f"Modpack paketi indiriliyor: {mrpack_file['filename']}...", also_log=True)
+        pack_bytes = requests.get(mrpack_file["url"], headers=HEADERS, timeout=60).content
+
+        tmp_zip_path = os.path.join(prof_dir, "_temp_pack.mrpack")
+        with open(tmp_zip_path, "wb") as f:
+            f.write(pack_bytes)
+
+        mc_version = self.version_combo.get().strip()
+        loader = self.loader_combo.get().strip() or "fabric"
+        loader_version = ""
+
+        try:
+            with zipfile.ZipFile(tmp_zip_path, "r") as zf:
+                if "modrinth.index.json" not in zf.namelist():
+                    raise RuntimeError("Geçersiz .mrpack arşivi: modrinth.index.json bulunamadı.")
+
+                index_data = json.loads(zf.read("modrinth.index.json").decode("utf-8"))
+                deps = index_data.get("dependencies", {})
+                if deps.get("minecraft"):
+                    mc_version = deps["minecraft"]
+                if deps.get("fabric-loader"):
+                    loader, loader_version = "fabric", deps["fabric-loader"]
+                elif deps.get("quilt-loader"):
+                    loader, loader_version = "quilt", deps["quilt-loader"]
+                elif deps.get("forge"):
+                    loader, loader_version = "forge", deps["forge"]
+                elif deps.get("neoforge"):
+                    loader, loader_version = "neoforge", deps["neoforge"]
+
+                # Overrides klasörlerini kopyala
+                ov_count = self._safe_extract_zip_prefix(zf, "overrides", prof_dir)
+                ov_client_count = self._safe_extract_zip_prefix(zf, "client-overrides", prof_dir)
+                if ov_count + ov_client_count > 0:
+                    self.log(f"[MODPACK] {ov_count + ov_client_count} yapılandırma/override dosyası çıkarıldı.")
+
+                # Modpack içindeki tüm dosyaları (mods, resourcepacks vb.) indir
+                files_list = index_data.get("files", [])
+                total_f = len(files_list)
+                self.log(f"[MODPACK] {total_f} modpack dosyası indiriliyor...")
+                prof_abs = os.path.abspath(prof_dir)
+
+                for i, f_entry in enumerate(files_list, start=1):
+                    rel_p = f_entry.get("path", "").replace("\\", "/").lstrip("/")
+                    downloads = f_entry.get("downloads", [])
+                    if not rel_p or not downloads:
+                        continue
+                    out_file = os.path.abspath(os.path.join(prof_dir, rel_p))
+                    if not out_file.startswith(prof_abs + os.sep):
+                        continue
+                    if os.path.isfile(out_file):
+                        continue
+                    os.makedirs(os.path.dirname(out_file), exist_ok=True)
+                    if i == 1 or i % 10 == 0 or i == total_f:
+                        self.update_status(f"Modpack dosyaları indiriliyor ({i}/{total_f}): {os.path.basename(out_file)}", also_log=True)
+                    for dl_url in downloads:
+                        try:
+                            resp = requests.get(dl_url, headers=HEADERS, timeout=30)
+                            resp.raise_for_status()
+                            with open(out_file, "wb") as out_f:
+                                out_f.write(resp.content)
+                            break
+                        except Exception:
+                            continue
+        finally:
+            if os.path.isfile(tmp_zip_path):
+                try:
+                    os.remove(tmp_zip_path)
+                except Exception:
+                    pass
+
+        return mc_version, loader, loader_version
+
+    def _install_curseforge_modpack(self, mp, prof_dir):
+        api_key = self.mp_cf_key_entry.get().strip() or self.cf_key_entry.get().strip()
+        if not api_key:
+            raise RuntimeError("CurseForge modpack kurulumu için API Key girmen gerekiyor.")
+        cf_headers = {**HEADERS, "x-api-key": api_key}
+
+        r = requests.get(f"{CURSEFORGE_API}/mods/{mp['id']}/files", headers=cf_headers, timeout=15)
+        r.raise_for_status()
+        files_data = r.json().get("data", [])
+        if not files_data:
+            raise RuntimeError("Bu CurseForge modpack için dosya bulunamadı.")
+
+        pack_file = files_data[0]
+        dl_url = pack_file.get("downloadUrl")
+        if not dl_url:
+            raise RuntimeError("CurseForge bu modpack'in doğrudan indirilmesine izin vermiyor.")
+
+        self.update_status(f"CurseForge modpack indiriliyor: {pack_file['fileName']}...", also_log=True)
+        zip_bytes = requests.get(dl_url, headers=HEADERS, timeout=60).content
+        tmp_zip_path = os.path.join(prof_dir, "_temp_cf_pack.zip")
+        with open(tmp_zip_path, "wb") as f:
+            f.write(zip_bytes)
+
+        mc_version = self.version_combo.get().strip()
+        loader = self.loader_combo.get().strip() or "forge"
+        loader_version = ""
+
+        try:
+            with zipfile.ZipFile(tmp_zip_path, "r") as zf:
+                if "manifest.json" not in zf.namelist():
+                    raise RuntimeError("Geçersiz CurseForge modpack arşivi: manifest.json bulunamadı.")
+
+                manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+                mc_info = manifest.get("minecraft", {})
+                if mc_info.get("version"):
+                    mc_version = mc_info["version"]
+
+                for ml in mc_info.get("modLoaders", []):
+                    ml_id = (ml.get("id") or "").lower()
+                    if ml_id.startswith("fabric-"):
+                        loader = "fabric"
+                        loader_version = ml_id.split("fabric-", 1)[1]
+                        break
+                    elif ml_id.startswith("forge-"):
+                        loader = "forge"
+                        loader_version = ml_id.split("forge-", 1)[1]
+                        break
+                    elif ml_id.startswith("neoforge-"):
+                        loader = "neoforge"
+                        loader_version = ml_id.split("neoforge-", 1)[1]
+                        break
+                    elif ml_id.startswith("quilt-"):
+                        loader = "quilt"
+                        loader_version = ml_id.split("quilt-", 1)[1]
+                        break
+
+                ov_name = manifest.get("overrides", "overrides")
+                ov_extracted = self._safe_extract_zip_prefix(zf, ov_name, prof_dir)
+                if ov_extracted > 0:
+                    self.log(f"[MODPACK] {ov_extracted} override dosyası çıkarıldı.")
+
+                mods_dir = os.path.join(prof_dir, "mods")
+                os.makedirs(mods_dir, exist_ok=True)
+                cf_files = manifest.get("files", [])
+                total_m = len(cf_files)
+                self.log(f"[MODPACK] {total_m} CurseForge modu indiriliyor...")
+
+                for idx_m, m_item in enumerate(cf_files, start=1):
+                    if not m_item.get("required", True):
+                        continue
+                    m_id = m_item.get("projectID")
+                    f_id = m_item.get("fileID")
+                    if not m_id or not f_id:
+                        continue
+                    try:
+                        fr = requests.get(f"{CURSEFORGE_API}/mods/{m_id}/files/{f_id}", headers=cf_headers, timeout=15)
+                        fr.raise_for_status()
+                        f_obj = fr.json().get("data", {})
+                        f_url = f_obj.get("downloadUrl")
+                        f_name = f_obj.get("fileName") or f"{m_id}_{f_id}.jar"
+                        if f_url:
+                            dest_jar = os.path.join(mods_dir, f_name)
+                            if not os.path.isfile(dest_jar):
+                                content = requests.get(f_url, headers=HEADERS, timeout=30).content
+                                with open(dest_jar, "wb") as jf:
+                                    jf.write(content)
+                        if idx_m == 1 or idx_m % 15 == 0 or idx_m == total_m:
+                            self.update_status(f"Modpack modları indiriliyor ({idx_m}/{total_m})...", also_log=True)
+                    except Exception:
+                        continue
+        finally:
+            if os.path.isfile(tmp_zip_path):
+                try:
+                    os.remove(tmp_zip_path)
+                except Exception:
+                    pass
+
+        return mc_version, loader, loader_version
+
+    def _run_modpack_install(self, mp):
+        try:
+            folder_name = self._slugify(f"{mp['title']}_{mp['source']}")
+            prof_dir = os.path.join(self.custom_profiles_root, folder_name)
+            os.makedirs(os.path.join(prof_dir, "mods"), exist_ok=True)
+
+            if mp["source"] == "Modrinth":
+                mc_ver, loader, loader_ver = self._install_modrinth_modpack(mp, prof_dir)
+            else:
+                mc_ver, loader, loader_ver = self._install_curseforge_modpack(mp, prof_dir)
+
+            meta = {
+                "type": "modpack",
+                "name": mp["title"],
+                "source": mp["source"],
+                "folder": folder_name,
+                "game_dir": prof_dir,
+                "mc_version": mc_ver,
+                "loader": loader,
+                "loader_version": loader_ver,
+                "ram_mb": self.config.get("ram_mb", 4096),
+            }
+            with open(os.path.join(prof_dir, "profile.json"), "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False, indent=2)
+
+            self.root.after(0, lambda: self._apply_profile(meta))
+            self.update_status(f"Modpack kuruldu ve aktif yapıldı: {mp['title']}", also_log=True)
+            if self.config.get("notify_mod_done", True):
+                self.root.after(0, lambda: messagebox.showinfo("FOXLAUNCHER", f"'{mp['title']}' modpack başarıyla kuruldu!"))
+        except Exception as e:
+            self.root.after(0, lambda: messagebox.showerror("Modpack Kurulum Hatası", str(e)))
+            self.update_status(f"Modpack hatası: {e}", also_log=True)
+        finally:
+            self._is_busy = False
+            self.root.after(0, lambda: (
+                self.dl_mp_btn.set_enabled(True),
+                self.dl_mp_btn.set_text("Seçili Modpack'i Yeni Profil Olarak İndir ve Kur")
+            ))
 
 
 if __name__ == "__main__":
