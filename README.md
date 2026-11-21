@@ -1,1 +1,1 @@
-# -E-YARAMAZ-SADECE-KAYNAK-KOD-SADECE-KURULUM-S-H-RBAZI-N
+kkurrulum sihirbazının alacısı
